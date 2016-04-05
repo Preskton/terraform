@@ -61,6 +61,7 @@ type virtualMachine struct {
 	dnsSuffixes          []string
 	dnsServers           []string
 	customConfigurations map[string](types.AnyType)
+	guestId              string
 }
 
 func (v virtualMachine) Path() string {
@@ -128,6 +129,13 @@ func resourceVSphereVirtualMachine() *schema.Resource {
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
+			},
+
+			"guest_id": &schema.Schema{
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+				Default:  "otherLinux64Guest",
 			},
 
 			"domain": &schema.Schema{
@@ -316,6 +324,10 @@ func resourceVSphereVirtualMachineCreate(d *schema.ResourceData, meta interface{
 
 	if v, ok := d.GetOk("time_zone"); ok {
 		vm.timeZone = v.(string)
+	}
+
+	if v, ok := d.GetOk("guest_id"); ok {
+		vm.guestId = v.(string)
 	}
 
 	if raw, ok := d.GetOk("dns_suffixes"); ok {
@@ -908,7 +920,7 @@ func (vm *virtualMachine) createVirtualMachine(c *govmomi.Client) error {
 
 	// make config spec
 	configSpec := types.VirtualMachineConfigSpec{
-		GuestId:           "otherLinux64Guest",
+		GuestId:           vm.guestId,
 		Name:              vm.name,
 		NumCPUs:           vm.vcpu,
 		NumCoresPerSocket: 1,
@@ -1179,21 +1191,48 @@ func (vm *virtualMachine) deployVirtualMachine(c *govmomi.Client) error {
 		log.Printf("[DEBUG] virtual machine Extra Config spec: %v", configSpec.ExtraConfig)
 	}
 
-	// create CustomizationSpec
-	customSpec := types.CustomizationSpec{
-		Identity: &types.CustomizationLinuxPrep{
-			HostName: &types.CustomizationFixedName{
-				Name: strings.Split(vm.name, ".")[0],
+	var customSpec types.CustomizationSpec
+
+	if strings.Contains(vm.guestId, "windows") {
+		customSpec = types.CustomizationSpec{
+			Identity: &types.CustomizationSysprep{
+				UserData: types.CustomizationUserData{
+					ComputerName: &types.CustomizationFixedName{
+						Name: "AANATEST",
+					},
+					FullName: "Test User",
+					OrgName:  "Test Org",
+				},
+				GuiUnattended: types.CustomizationGuiUnattended{
+					AutoLogon:      true,
+					AutoLogonCount: 1,
+				},
+				Identification: types.CustomizationIdentification{
+					DomainAdmin: "Administrator",
+				},
 			},
-			Domain:     vm.domain,
-			TimeZone:   vm.timeZone,
-			HwClockUTC: types.NewBool(true),
-		},
-		GlobalIPSettings: types.CustomizationGlobalIPSettings{
-			DnsSuffixList: vm.dnsSuffixes,
-			DnsServerList: vm.dnsServers,
-		},
-		NicSettingMap: networkConfigs,
+			GlobalIPSettings: types.CustomizationGlobalIPSettings{
+				DnsSuffixList: vm.dnsSuffixes,
+				DnsServerList: vm.dnsServers,
+			},
+			NicSettingMap: networkConfigs,
+		}
+	} else {
+		customSpec = types.CustomizationSpec{
+			Identity: &types.CustomizationLinuxPrep{
+				HostName: &types.CustomizationFixedName{
+					Name: strings.Split(vm.name, ".")[0],
+				},
+				Domain:     vm.domain,
+				TimeZone:   vm.timeZone,
+				HwClockUTC: types.NewBool(true),
+			},
+			GlobalIPSettings: types.CustomizationGlobalIPSettings{
+				DnsSuffixList: vm.dnsSuffixes,
+				DnsServerList: vm.dnsServers,
+			},
+			NicSettingMap: networkConfigs,
+		}
 	}
 	log.Printf("[DEBUG] custom spec: %v", customSpec)
 
@@ -1251,11 +1290,13 @@ func (vm *virtualMachine) deployVirtualMachine(c *govmomi.Client) error {
 		return err
 	}
 
-	_, err = taskb.WaitForResult(context.TODO(), nil)
-	if err != nil {
-		return err
-	}
-	log.Printf("[DEBUG]VM customization finished")
+	// TODO: This is causing Windows integration to fail
+	// _, err = taskb.WaitForResult(context.TODO(), nil)
+	// if err != nil {
+	// 	log.Printf("[DEBUG] Wait for result failed %v", err)
+	// 	return err
+	// }
+	// log.Printf("[DEBUG] VM customization finished")
 
 	for i := 1; i < len(vm.hardDisks); i++ {
 		err = addHardDisk(newVM, vm.hardDisks[i].size, vm.hardDisks[i].iops, vm.hardDisks[i].initType)
