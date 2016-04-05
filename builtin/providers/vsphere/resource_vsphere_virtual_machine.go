@@ -1198,17 +1198,23 @@ func (vm *virtualMachine) deployVirtualMachine(c *govmomi.Client) error {
 			Identity: &types.CustomizationSysprep{
 				UserData: types.CustomizationUserData{
 					ComputerName: &types.CustomizationFixedName{
-						Name: "AANATEST",
+						Name: "MachineName",
 					},
-					FullName: "Test User",
-					OrgName:  "Test Org",
+					FullName: "TestUser",
+					OrgName:  "TestOrg",
 				},
 				GuiUnattended: types.CustomizationGuiUnattended{
 					AutoLogon:      true,
 					AutoLogonCount: 1,
+					TimeZone:       0,
 				},
 				Identification: types.CustomizationIdentification{
-					DomainAdmin: "Administrator",
+					DomainAdmin: "Username",
+					DomainAdminPassword: &types.CustomizationPassword{
+						PlainText: true,
+						Value:     "Password",
+					},
+					JoinDomain: "domain.com",
 				},
 			},
 			GlobalIPSettings: types.CustomizationGlobalIPSettings{
@@ -1272,35 +1278,43 @@ func (vm *virtualMachine) deployVirtualMachine(c *govmomi.Client) error {
 		if devices.Type(dvc) == "ethernet" {
 			err := newVM.RemoveDevice(context.TODO(), dvc)
 			if err != nil {
+				log.Printf("[DEBUG] Ethernet device removal failed %v", err)
 				return err
 			}
 		}
 	}
+	log.Printf("[DEBUG] Ethernet device removed")
+
 	// Add Network devices
 	for _, dvc := range networkDevices {
 		err := newVM.AddDevice(
 			context.TODO(), dvc.GetVirtualDeviceConfigSpec().Device)
 		if err != nil {
+			log.Printf("[DEBUG] added network devices failed")
 			return err
 		}
 	}
+	log.Printf("[DEBUG] Network devices added")
 
 	taskb, err := newVM.Customize(context.TODO(), customSpec)
 	if err != nil {
+		log.Printf("[DEBUG] Customizaions failed %v", err)
 		return err
 	}
+	log.Printf("[DEBUG] Customizations success %v", taskb)
 
 	// TODO: This is causing Windows integration to fail
-	// _, err = taskb.WaitForResult(context.TODO(), nil)
-	// if err != nil {
-	// 	log.Printf("[DEBUG] Wait for result failed %v", err)
-	// 	return err
-	// }
-	// log.Printf("[DEBUG] VM customization finished")
+	_, err = taskb.WaitForResult(context.TODO(), nil)
+	if err != nil {
+		log.Printf("[DEBUG] Wait for result failed %v", err)
+		return err
+	}
+	log.Printf("[DEBUG] VM customization finished")
 
 	for i := 1; i < len(vm.hardDisks); i++ {
 		err = addHardDisk(newVM, vm.hardDisks[i].size, vm.hardDisks[i].iops, vm.hardDisks[i].initType)
 		if err != nil {
+			log.Printf("[DEBUG] Hard disks not added")
 			return err
 		}
 	}
